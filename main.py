@@ -50,6 +50,18 @@ def send_telegram_alert(msg):
         res.raise_for_status()
     except Exception as e:
         print(f"⚠️ Telegram alert failed: {e}")
+def monitor_delhi_go_arounds():
+    global hourly_go_around_count
+
+    try:
+        # Log every time an API call is triggered
+        print(f"[{time.strftime('%H:%M:%S')}] 📡 Fetching FlightRadar24 data for Delhi Airport...")
+
+        bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 35000)
+        aircraft_list = fr_api.get_flights(bounds=bounds)
+        print(f"[{time.strftime('%H:%M:%S')}] ✅ Received {len(aircraft_list)} tracked aircraft.")
+    except requests.exceptions.Timeout:
+        # ...
 
 def monitor_delhi_go_arounds():
     global hourly_go_around_count
