@@ -10,7 +10,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Delhi Destination Bot Operational")
+        self.wfile.write(b"Delhi Go-Around Monitor Active")
 
     def log_message(self, format, *args):
         return
@@ -50,26 +50,23 @@ def send_telegram_alert(msg):
     except Exception as e:
         print(f"⚠️ Telegram alert failed: {e}")
 
-# --- 3. MONITORING & DESTINATION FILTERING LOGIC ---
+# --- 3. MONITORING & GO-AROUND DETECTION LOGIC ---
 def monitor_delhi_go_arounds():
     global hourly_go_around_count
 
     current_time_str = time.strftime("%H:%M:%S")
-    print(f"[{current_time_str}] 📡 Polling flights destined for Delhi Airport...")
 
     try:
         bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 35000)
         aircraft_list = fr_api.get_flights(bounds=bounds)
     except requests.exceptions.Timeout:
-        print("⚠️ FlightRadar24 API timeout (60s cycle skipped).")
-        send_telegram_alert("⚠️ *FlightRadar24 API Timeout*: Request timed out. Retrying in 60s...")
+        print(f"[{current_time_str}] ⚠️ API timeout (60s cycle skipped).")
         return
     except Exception as e:
-        print(f"⚠️ API query failed: {e}")
+        print(f"[{current_time_str}] ⚠️ API query failed: {e}")
         return
 
     current_seen_icaos = set()
-    delhi_bound_flights = []
 
     for ac in aircraft_list:
         icao24 = getattr(ac, 'icao_24bit', None)
@@ -97,29 +94,13 @@ def monitor_delhi_go_arounds():
         origin = getattr(ac, 'origin_airport_iata', None) or "???"
 
         # --- EXCLUSIVE DESTINATION FILTERING ---
-        # 1. Destination IATA is explicitly "DEL"
-        # 2. Or fallback: High altitude entry (>=2500ft) and descending near DEL
         is_destined_for_delhi = (dest == "DEL") or (alt_agl >= 2500 and vspeed_ftmin < 0)
 
         if dist_km <= 30.0 and is_destined_for_delhi:
             current_seen_icaos.add(icao24)
-            delhi_bound_flights.append({
-                'icao24': icao24,
-                'callsign': callsign,
-                'origin': origin,
-                'dest': dest,
-                'alt_ft': alt_ft,
-                'alt_agl': alt_agl,
-                'vspeed_ftmin': vspeed_ftmin,
-                'ground_speed': ground_speed,
-                'dist_km': dist_km
-            })
-
             prev = flight_history.get(icao24)
 
             if prev:
-                prev['is_arrival'] = True # Confirmed inbound to Delhi
-
                 # --- GO-AROUND EVALUATION ---
                 was_on_low_approach = prev['lowest_alt_agl'] <= 1500
                 was_descending = prev['last_vspeed'] <= 200
@@ -155,49 +136,15 @@ def monitor_delhi_go_arounds():
                     'lowest_alt_agl': alt_agl,
                     'last_vspeed': vspeed_ftmin,
                     'last_alt_ft': alt_ft,
-                    'is_arrival': True,
                     'alert_sent': False
                 }
-
-    # --- 4. BUILD MINUTELY TELEMETRY REPORT FOR DELHI ARRIVALS ONLY ---
-    report_lines = [f"📡 *DELHI ARRIVALS REPORT — {current_time_str} IST*"]
-    report_lines.append(f"🛬 *Inbound Flights to DEL (30km Scope)*: `{len(delhi_bound_flights)}`")
-    report_lines.append("───────────────────────")
-
-    if not delhi_bound_flights:
-        report_lines.append("ℹ️ _No Delhi-bound arrivals active in 30km radius._")
-    else:
-        for item in delhi_bound_flights[:10]:
-            icao = item['icao24']
-            prev_data = flight_history.get(icao)
-            
-            if prev_data and 'last_alt_ft' in prev_data:
-                alt_diff = item['alt_ft'] - prev_data['last_alt_ft']
-                if alt_diff > 0:
-                    delta_str = f" (▲+{alt_diff}ft)"
-                elif alt_diff < 0:
-                    delta_str = f" (▼{alt_diff}ft)"
-                else:
-                    delta_str = " (═ 0ft)"
-            else:
-                delta_str = " (🆕 New)"
-
-            vspd = item['vspeed_ftmin']
-            vspd_str = f"+{vspd}" if vspd > 0 else f"{vspd}"
-
-            report_lines.append(
-                f"• `{item['callsign']}` ({item['origin']} ➔ DEL)\n"
-                f"  └ Alt: `{item['alt_ft']}ft`{delta_str} | VSpd: `{vspd_str}ft/min` | Dist: `{round(item['dist_km'], 1)}km`"
-            )
-
-    send_telegram_alert("\n".join(report_lines))
 
     # Clean up stale flights
     stale_keys = [k for k in flight_history if k not in current_seen_icaos]
     for k in stale_keys:
         del flight_history[k]
 
-# --- 5. HOURLY SUMMARY REPORTING LOGIC ---
+# --- 4. HOURLY SUMMARY REPORTING LOGIC ---
 def check_and_send_hourly_report():
     global hourly_go_around_count, last_hourly_report_time
 
@@ -205,17 +152,17 @@ def check_and_send_hourly_report():
     if current_time - last_hourly_report_time >= 3600:
         report_msg = (
             f"📊 *HOURLY SUMMARY REPORT — DELHI (DEL/VIDP)*\n\n"
-            f"🟢 *Status*: Monitoring Delhi Arrivals Only\n"
-            f"🚨 *Total Go-Arounds in past hour*: `{hourly_go_around_count}`"
+            f"🟢 *Status*: Actively Monitoring Delhi Arrivals\n"
+            f"🚨 *Total Go-Arounds in Past Hour*: `{hourly_go_around_count}`"
         )
         send_telegram_alert(report_msg)
         hourly_go_around_count = 0
         last_hourly_report_time = current_time
 
-# --- 6. MAIN EXECUTION LOOP ---
+# --- 5. MAIN EXECUTION LOOP ---
 if __name__ == "__main__":
-    print("🚀 24/7 Render Delhi Go-Around Service Starting...")
-    send_telegram_alert("✅ *Bot Updated: Filtering EXCLUSIVELY for Delhi Arrivals (DEL).*")
+    print("🚀 Delhi Go-Around Monitor Started (Go-Around & Hourly Alerts Only)...")
+    send_telegram_alert("✅ *Bot Started*: Minutely reports disabled. Telegram alerts will only trigger on Go-Around events.")
 
     while True:
         try:
