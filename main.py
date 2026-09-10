@@ -10,7 +10,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Delhi Ultra-Sensitive Go-Around Monitor Active")
+        self.wfile.write(b"Delhi Arrival Go-Around Monitor Active")
 
     def log_message(self, format, *args):
         return
@@ -50,14 +50,14 @@ def send_telegram_alert(msg):
     except Exception as e:
         print(f"⚠️ Telegram alert failed: {e}")
 
-# --- 3. AGGRESSIVE GO-AROUND MONITORING LOGIC ---
+# --- 3. GO-AROUND MONITORING LOGIC ---
 def monitor_delhi_go_arounds():
     global hourly_go_around_count
 
     current_time_str = time.strftime("%H:%M:%S")
 
     try:
-        # Expanded 50km bounding box to ensure continuous tracking
+        # 50km bounding area around DEL Airport
         bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 50000)
         aircraft_list = fr_api.get_flights(bounds=bounds)
     except Exception as e:
@@ -89,9 +89,18 @@ def monitor_delhi_go_arounds():
         dest = getattr(ac, 'destination_airport_iata', None) or "???"
         origin = getattr(ac, 'origin_airport_iata', None) or "???"
 
-        # --- MAXIMUM TRACKING INCLUSION ---
-        # Track if explicitly destined for DEL OR flying below 8000ft AGL anywhere in 50km
-        should_track = (dest == "DEL") or (alt_agl <= 8000)
+        # --- EXCLUDE DEPARTURES & TRACK ARRIVALS ---
+        # 1. Ignore if departure origin is DEL
+        if origin == "DEL":
+            should_track = False
+        # 2. Track if destination is DEL
+        elif dest == "DEL":
+            should_track = True
+        # 3. Track untagged flights near low approach ceiling
+        elif dest in ["???", None]:
+            should_track = (alt_agl <= 8000)
+        else:
+            should_track = False
 
         if should_track:
             current_seen_icaos.add(icao24)
@@ -100,9 +109,8 @@ def monitor_delhi_go_arounds():
             if prev:
                 alt_diff = alt_ft - prev['last_alt_ft']
                 
-                # --- AGGRESSIVE ZERO-MISS GO-AROUND CRITERIA ---
-                # 1. Plane was below 3,500 ft AGL at any point previously
-                # 2. Altitude increased by 50 ft or more in a 20s window
+                # --- GO-AROUND DETECTION ---
+                # Plane was below 3,500 ft AGL and climbed >= 50 ft in 20s
                 was_low = prev['lowest_alt_agl'] <= 3500
                 is_climbing = alt_diff >= 50
 
@@ -110,21 +118,21 @@ def monitor_delhi_go_arounds():
                     if not prev.get('alert_sent'):
                         hourly_go_around_count += 1
                         alert_msg = (
-                            f"🚨 *POSSIBLE GO-AROUND ALERT (DEL/VIDP)* 🚨\n\n"
+                            f"🚨 *POSSIBLE GO-AROUND DETECTED (DEL/VIDP)* 🚨\n\n"
                             f"✈️ *Flight/Callsign*: `{callsign}`\n"
                             f"🛫 *Route*: `{origin} ➔ {dest}`\n"
                             f"🆔 *ICAO*: `{icao24}`\n"
                             f"📏 *Current Altitude*: `{int(alt_ft)} ft MSL` (`~{int(alt_agl)} ft AGL`)\n"
-                            f"📈 *Instant Altitude Gain*: `+{int(alt_diff)} ft`\n"
+                            f"📈 *Altitude Gain*: `+{int(alt_diff)} ft`\n"
                             f"📉 *Lowest Altitude Seen*: `{int(prev['lowest_alt_agl'])} ft AGL`\n"
                             f"🚀 *Ground Speed*: `{int(ground_speed)} kts`\n"
                             f"📍 *Distance*: `{round(dist_km, 2)} km`"
                         )
-                        print(f"🔥 [FAST ALERT TRIGGERED] {callsign} (+{alt_diff}ft)")
+                        print(f"🔥 [GO-AROUND DETECTED] {callsign} (+{alt_diff}ft)")
                         send_telegram_alert(alert_msg)
                         prev['alert_sent'] = True
 
-                # Record lowest altitude ever reached & current reading
+                # Record lowest altitude ever seen & current reading
                 prev['lowest_alt_agl'] = min(prev['lowest_alt_agl'], alt_agl)
                 prev['last_alt_ft'] = alt_ft
                 flight_history[icao24] = prev
@@ -137,7 +145,7 @@ def monitor_delhi_go_arounds():
                     'alert_sent': False
                 }
 
-    # Clean up flight history only after missing for 10 consecutive cycles (~3 minutes)
+    # Clean up stale flights (not seen for 10 consecutive cycles / ~3 mins)
     for k in list(flight_history.keys()):
         if k not in current_seen_icaos:
             flight_history[k]['missing_count'] = flight_history[k].get('missing_count', 0) + 1
@@ -152,8 +160,8 @@ def check_and_send_hourly_report():
     if current_time - last_hourly_report_time >= 3600:
         report_msg = (
             f"📊 *HOURLY SUMMARY REPORT — DELHI (DEL/VIDP)*\n\n"
-            f"🟢 *Status*: High-Speed (20s) Sensitivity Monitoring Active\n"
-            f"🚨 *Alerts Triggered in Past Hour*: `{hourly_go_around_count}`"
+            f"🟢 *Status*: Actively Tracking DEL Inbounds Only\n"
+            f"🚨 *Go-Arounds in Past Hour*: `{hourly_go_around_count}`"
         )
         send_telegram_alert(report_msg)
         hourly_go_around_count = 0
@@ -161,8 +169,8 @@ def check_and_send_hourly_report():
 
 # --- 5. MAIN EXECUTION LOOP ---
 if __name__ == "__main__":
-    print("🚀 Ultra-Sensitive 20s Monitor Running...")
-    send_telegram_alert("⚡ *Bot Updated*: Polling rate boosted to 20 seconds. Zero-miss high-sensitivity mode activated.")
+    print("🚀 Delhi Arrival Go-Around Monitor Running...")
+    send_telegram_alert("✅ *Bot Updated*: Departures from DEL are now excluded. Monitoring arrivals only.")
 
     while True:
         try:
@@ -171,5 +179,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"⚠️ Unexpected error in main loop: {e}")
         
-        # Reduced to 20-second delay for rapid extraction
         time.sleep(20)
