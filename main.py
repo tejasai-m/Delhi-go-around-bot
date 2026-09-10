@@ -24,7 +24,7 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # --- 2. BOT CONFIGURATION & CONSTANTS ---
 TELEGRAM_BOT_TOKEN = "8451032835:AAFz9Mqvpx-xndjfDuSDX8GtC8bXdnwB2RI"
-TELEGRAM_CHAT_ID = "5325948125"
+TELEGRAM_CHAT_ID = "-5410082469"
 
 DEL_LAT = 28.5562
 DEL_LON = 77.1000
