@@ -58,7 +58,7 @@ def monitor_delhi_go_arounds():
 
     try:
         # 50km bounding area around DEL Airport
-        bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 50000)
+        bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 30000)
         aircraft_list = fr_api.get_flights(bounds=bounds)
     except Exception as e:
         print(f"[{current_time_str}] ⚠️ API query failed or timed out: {e}")
@@ -160,7 +160,7 @@ def check_and_send_hourly_report():
     if current_time - last_hourly_report_time >= 3600:
         report_msg = (
             f"📊 *HOURLY SUMMARY REPORT — DELHI (DEL/VIDP)*\n\n"
-            f"🟢 *Status*: Actively Tracking DEL Inbounds Only\n"
+            f"🟢 *Status*: Actively Tracking DEL Inbounds Only(30KM)\n"
             f"🚨 *Go-Arounds in Past Hour*: `{hourly_go_around_count}`"
         )
         send_telegram_alert(report_msg)
