@@ -5,7 +5,7 @@ import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from FlightRadarAPI import FlightRadar24API
 
-# --- 1. DUMMY WEB SERVER (Keeps Host Active) ---
+# --- 1. DUMMY WEB SERVER ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -23,8 +23,8 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # --- 2. BOT CONFIGURATION & CONSTANTS ---
-TELEGRAM_BOT_TOKEN = "8451032835:AAFz9Mqvpx-xndjfDuSDX8GtC8bXdnwB2RI"
-TELEGRAM_CHAT_ID = "-5410082469"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8451032835:AAFz9Mqvpx-xndjfDuSDX8GtC8bXdnwB2RI")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "-5410082469")
 
 DEL_LAT = 28.5562
 DEL_LON = 77.1000
@@ -34,7 +34,7 @@ fr_api = FlightRadar24API()
 
 flight_history = {}
 hourly_go_around_count = 0
-last_hourly_report_time = time.time()
+counter_lock = threading.Lock()  # Prevents thread conflicts when updating count
 
 def send_telegram_alert(msg):
     """Sends Markdown formatted alert to Telegram."""
@@ -45,19 +45,43 @@ def send_telegram_alert(msg):
         "parse_mode": "Markdown"
     }
     try:
-        res = requests.post(url, json=payload, timeout=5)
+        res = requests.post(url, json=payload, timeout=10)
         res.raise_for_status()
+        return True
     except Exception as e:
         print(f"⚠️ Telegram alert failed: {e}")
+        return False
 
-# --- 3. GO-AROUND MONITORING LOGIC ---
+# --- 3. DEDICATED HOURLY REPORT THREAD ---
+def hourly_report_worker():
+    """Runs independently every 3600 seconds (1 hour)."""
+    global hourly_go_around_count
+    
+    while True:
+        time.sleep(3600)  # Wait exactly 1 hour
+        
+        with counter_lock:
+            count_to_report = hourly_go_around_count
+            hourly_go_around_count = 0  # Reset counter
+
+        report_msg = (
+            f"📊 *HOURLY SUMMARY REPORT — DELHI (DEL/VIDP)*\n\n"
+            f"🟢 *Status*: Actively Tracking DEL Inbounds Only (25KM radius)\n"
+            f"🚨 *Go-Arounds in Past Hour*: `{count_to_report}`"
+        )
+        print("Sending hourly report...")
+        send_telegram_alert(report_msg)
+
+# Start the hourly report thread
+threading.Thread(target=hourly_report_worker, daemon=True).start()
+
+# --- 4. GO-AROUND MONITORING LOGIC ---
 def monitor_delhi_go_arounds():
     global hourly_go_around_count
 
     current_time_str = time.strftime("%H:%M:%S")
 
     try:
-        # 50km bounding area around DEL Airport
         bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 25000)
         aircraft_list = fr_api.get_flights(bounds=bounds)
     except Exception as e:
@@ -83,20 +107,20 @@ def monitor_delhi_go_arounds():
         if None in [alt_ft, lat, lon]:
             continue
 
-        dist_km = ac.get_distance_from(fr_api.get_airport("DEL")) if hasattr(ac, 'get_distance_from') else 0.0
+        try:
+            dist_km = ac.get_distance_from(fr_api.get_airport("DEL")) if hasattr(ac, 'get_distance_from') else 0.0
+        except Exception:
+            dist_km = 0.0
+
         alt_agl = max(0, alt_ft - DEL_ELEVATION_FT)
 
         dest = getattr(ac, 'destination_airport_iata', None) or "???"
         origin = getattr(ac, 'origin_airport_iata', None) or "???"
 
-        # --- EXCLUDE DEPARTURES & TRACK ARRIVALS ---
-        # 1. Ignore if departure origin is DEL
         if origin == "DEL":
             should_track = False
-        # 2. Track if destination is DEL
         elif dest == "DEL":
             should_track = True
-        # 3. Track untagged flights near low approach ceiling
         elif dest in ["???", None]:
             should_track = (alt_agl <= 8000)
         else:
@@ -109,14 +133,14 @@ def monitor_delhi_go_arounds():
             if prev:
                 alt_diff = alt_ft - prev['last_alt_ft']
                 
-                # --- GO-AROUND DETECTION ---
-                # Plane was below 3,500 ft AGL and climbed >= 100 ft in 20s
                 was_low = prev['lowest_alt_agl'] <= 3500
-                is_climbing = alt_diff >= 100
+                is_climbing = alt_diff >= 100  # Threshold raised to avoid false positives
 
                 if was_low and is_climbing:
                     if not prev.get('alert_sent'):
-                        hourly_go_around_count += 1
+                        with counter_lock:
+                            hourly_go_around_count += 1
+                        
                         alert_msg = (
                             f"🚨 *POSSIBLE GO-AROUND DETECTED (DEL/VIDP)* 🚨\n\n"
                             f"✈️ *Flight/Callsign*: `{callsign}`\n"
@@ -132,9 +156,9 @@ def monitor_delhi_go_arounds():
                         send_telegram_alert(alert_msg)
                         prev['alert_sent'] = True
 
-                # Record lowest altitude ever seen & current reading
                 prev['lowest_alt_agl'] = min(prev['lowest_alt_agl'], alt_agl)
                 prev['last_alt_ft'] = alt_ft
+                prev['missing_count'] = 0
                 flight_history[icao24] = prev
 
             else:
@@ -142,40 +166,25 @@ def monitor_delhi_go_arounds():
                     'callsign': callsign,
                     'lowest_alt_agl': alt_agl,
                     'last_alt_ft': alt_ft,
-                    'alert_sent': False
+                    'alert_sent': False,
+                    'missing_count': 0
                 }
 
-    # Clean up stale flights (not seen for 10 consecutive cycles / ~3 mins)
+    # Clean up stale flights
     for k in list(flight_history.keys()):
         if k not in current_seen_icaos:
             flight_history[k]['missing_count'] = flight_history[k].get('missing_count', 0) + 1
             if flight_history[k]['missing_count'] >= 10:
                 del flight_history[k]
 
-# --- 4. HOURLY SUMMARY REPORTING LOGIC ---
-def check_and_send_hourly_report():
-    global hourly_go_around_count, last_hourly_report_time
-
-    current_time = time.time()
-    if current_time - last_hourly_report_time >= 3600:
-        report_msg = (
-            f"📊 *HOURLY SUMMARY REPORT — DELHI (DEL/VIDP)*\n\n"
-            f"🟢 *Status*: Actively Tracking DEL Inbounds Only(around 25KM & alt_diff 100ft)\n"
-            f"🚨 *Go-Arounds in Past Hour*: `{hourly_go_around_count}`"
-        )
-        send_telegram_alert(report_msg)
-        hourly_go_around_count = 0
-        last_hourly_report_time = current_time
-
 # --- 5. MAIN EXECUTION LOOP ---
 if __name__ == "__main__":
     print("🚀 Delhi Arrival Go-Around Monitor Running...")
-    send_telegram_alert("✅ *Bot Updated*: Departures from DEL are now excluded. Monitoring arrivals only in 25KM radius.")
+    send_telegram_alert("✅ *Bot Updated*: Monitoring active. Hourly report thread started.")
 
     while True:
         try:
             monitor_delhi_go_arounds()
-            check_and_send_hourly_report()
         except Exception as e:
             print(f"⚠️ Unexpected error in main loop: {e}")
         
