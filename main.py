@@ -110,9 +110,9 @@ def monitor_delhi_go_arounds():
                 alt_diff = alt_ft - prev['last_alt_ft']
                 
                 # --- GO-AROUND DETECTION ---
-                # Plane was below 3,500 ft AGL and climbed >= 50 ft in 20s
+                # Plane was below 3,500 ft AGL and climbed >= 100 ft in 20s
                 was_low = prev['lowest_alt_agl'] <= 3500
-                is_climbing = alt_diff >= 50
+                is_climbing = alt_diff >= 100
 
                 if was_low and is_climbing:
                     if not prev.get('alert_sent'):
@@ -160,7 +160,7 @@ def check_and_send_hourly_report():
     if current_time - last_hourly_report_time >= 3600:
         report_msg = (
             f"📊 *HOURLY SUMMARY REPORT — DELHI (DEL/VIDP)*\n\n"
-            f"🟢 *Status*: Actively Tracking DEL Inbounds Only(around 25KM)\n"
+            f"🟢 *Status*: Actively Tracking DEL Inbounds Only(around 25KM & alt_diff 100ft)\n"
             f"🚨 *Go-Arounds in Past Hour*: `{hourly_go_around_count}`"
         )
         send_telegram_alert(report_msg)
