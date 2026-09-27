@@ -66,7 +66,7 @@ def hourly_report_worker():
 
         report_msg = (
             f"📊 *HOURLY SUMMARY REPORT — DELHI (DEL/VIDP)*\n\n"
-            f"🟢 *Status*: Actively Tracking DEL Inbounds Only (25KM radius)\n"
+            f"🟢 *Status*: Actively Tracking DEL Inbounds Only (20KM radius)\n"
             f"🚨 *Go-Arounds in Past Hour*: `{count_to_report}`"
         )
         print("Sending hourly report...")
@@ -82,7 +82,7 @@ def monitor_delhi_go_arounds():
     current_time_str = time.strftime("%H:%M:%S")
 
     try:
-        bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 25000)
+        bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 20000)
         aircraft_list = fr_api.get_flights(bounds=bounds)
     except Exception as e:
         print(f"[{current_time_str}] ⚠️ API query failed or timed out: {e}")
