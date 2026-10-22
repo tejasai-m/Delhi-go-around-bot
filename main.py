@@ -58,15 +58,15 @@ def hourly_report_worker():
     global hourly_go_around_count
     
     while True:
-        time.sleep(3600)  # Wait exactly 1 hour
+        time.sleep(86400)  # Wait exactly 1 hour
         
         with counter_lock:
             count_to_report = hourly_go_around_count
             hourly_go_around_count = 0  # Reset counter
 
         report_msg = (
-            f"📊 *HOURLY SUMMARY REPORT — DELHI (DEL/VIDP)*\n\n"
-            f"🟢 *Status*: Actively Tracking DEL Inbounds Only (20KM radius)\n"
+            f"📊 *DAILY CHECK RUNNING NORMALLY — DELHI (DEL/VIDP)*\n\n"
+            f"🟢 *Status*: Actively Tracking DEL Inbounds Only (15KM radius)\n"
             f"🚨 *Go-Arounds in Past Hour*: `{count_to_report}`"
         )
         print("Sending hourly report...")
@@ -82,7 +82,7 @@ def monitor_delhi_go_arounds():
     current_time_str = time.strftime("%H:%M:%S")
 
     try:
-        bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 20000)
+        bounds = fr_api.get_bounds_by_point(DEL_LAT, DEL_LON, 15000)
         aircraft_list = fr_api.get_flights(bounds=bounds)
     except Exception as e:
         print(f"[{current_time_str}] ⚠️ API query failed or timed out: {e}")
